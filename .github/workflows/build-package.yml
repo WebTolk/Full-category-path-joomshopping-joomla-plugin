@@ -36,11 +36,17 @@ jobs:
           version="${{ github.event.inputs.package_version || '' }}"
 
           if [ -z "$version" ]; then
-            version="$(php -r '$config = json_decode((string) file_get_contents(".agents/build/package.config.json"), true, 512, JSON_THROW_ON_ERROR); echo trim((string) ($config["version"] ?? ""));')"
+            if [ -f ".agents/build/package.config.json" ]; then
+              version="$(php -r '$json = @file_get_contents(".agents/build/package.config.json"); if ($json === false) { exit(0); } try { $config = json_decode($json, true, 512, JSON_THROW_ON_ERROR); echo trim((string) ($config["version"] ?? "")); } catch (Throwable $e) { echo ""; }')"
+            fi
           fi
 
           if [ -z "$version" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
             version="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [ -z "$version" ]; then
+            version="$(php -r '$xml = @simplexml_load_file("full_category_path.xml"); if ($xml) { $raw = trim((string) $xml->version); if ($raw !== "" && $raw !== "__DEPLOY_VERSION__") { echo $raw; } }')"
           fi
 
           if [ -z "$version" ]; then
