@@ -1,15 +1,19 @@
-name: Build Joomla Package
+name: Build And Release Joomla Package
 
 on:
   workflow_dispatch:
     inputs:
       package_version:
-        description: 'Optional package version. If empty, tag version or manifest version is used.'
+        description: 'Optional package version. If empty, tag version or package config version is used.'
         required: false
         type: string
   push:
     tags:
       - 'v*'
+
+env:
+  PACKAGER_REPOSITORY: web-tolk/phing-packager
+  PACKAGER_REF: main
 
 jobs:
   build:
@@ -20,62 +24,41 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
+
+      - name: Checkout shared packager
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PACKAGER_REPOSITORY }}
+          ref: ${{ env.PACKAGER_REF }}
+          path: .packager
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.1'
+          extensions: zip
           coverage: none
 
-      - name: Resolve package version
+      - name: Build Joomla package
         shell: bash
         run: |
           set -euo pipefail
 
-          version="${{ github.event.inputs.package_version || '' }}"
+          command=(php .packager/bin/packager.php package --config=.agents/build/package.config.json --output-dir=dist --stage-dir=.packages/.stage/github --github-env="${GITHUB_ENV}")
 
-          if [ -z "$version" ]; then
-            if [ -f ".agents/build/package.config.json" ]; then
-              version="$(php -r '$json = @file_get_contents(".agents/build/package.config.json"); if ($json === false) { exit(0); } try { $config = json_decode($json, true, 512, JSON_THROW_ON_ERROR); echo trim((string) ($config["version"] ?? "")); } catch (Throwable $e) { echo ""; }')"
-            fi
+          if [ -n "${{ inputs.package_version }}" ]; then
+            command+=(--version="${{ inputs.package_version }}")
+          elif [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            command+=(--version="${GITHUB_REF_NAME#v}")
           fi
 
-          if [ -z "$version" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
-            version="${GITHUB_REF_NAME#v}"
-          fi
-
-          if [ -z "$version" ]; then
-            version="$(php -r '$xml = @simplexml_load_file("full_category_path.xml"); if ($xml) { $raw = trim((string) $xml->version); if ($raw !== "" && $raw !== "__DEPLOY_VERSION__") { echo $raw; } }')"
-          fi
-
-          if [ -z "$version" ]; then
-            echo "Package version is empty." >&2
-            exit 1
-          fi
-
-          echo "PACKAGE_BUILD_VERSION=$version" >> "$GITHUB_ENV"
-
-      - name: Replace placeholders
-        shell: bash
-        run: |
-          set -euo pipefail
-          php build/replace-placeholders.php --version="$PACKAGE_BUILD_VERSION"
-
-      - name: Build ZIP
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p .packages
-          package_file=".packages/plg_jshoppingrouter_full_category_path_${PACKAGE_BUILD_VERSION}.zip"
-          zip -r "$package_file" full_category_path.xml language script.php services src
-          echo "PACKAGE_FILE=$package_file" >> "$GITHUB_ENV"
-          echo "PACKAGE_RELEASE_TAG=v${PACKAGE_BUILD_VERSION#v}" >> "$GITHUB_ENV"
+          "${command[@]}"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
         with:
-          name: Jshoppingrouter - Full Category Path ${{ env.PACKAGE_BUILD_VERSION }}
+          name: ${{ env.PACKAGE_DISPLAY_NAME }} ${{ env.PACKAGE_BUILD_VERSION }}
           tag_name: ${{ env.PACKAGE_RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: true

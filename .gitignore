@@ -1,8 +1,11 @@
 .idea
-.agents
+.agents/*
 !.agents/
 !.agents/build/
+.agents/build/*
 !.agents/build/package.config.json
 .packages
+.packager
 .serena
 phing.xml
+dist/
