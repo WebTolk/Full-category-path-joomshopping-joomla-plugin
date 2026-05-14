@@ -35,12 +35,12 @@ jobs:
 
           version="${{ github.event.inputs.package_version || '' }}"
 
-          if [ -z "$version" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
-            version="${GITHUB_REF_NAME#v}"
+          if [ -z "$version" ]; then
+            version="$(php -r '$config = json_decode((string) file_get_contents(".agents/build/package.config.json"), true, 512, JSON_THROW_ON_ERROR); echo trim((string) ($config["version"] ?? ""));')"
           fi
 
-          if [ -z "$version" ]; then
-            version="$(php -r '$xml = simplexml_load_file("full_category_path.xml"); if (!$xml) { exit(1); } echo (string) $xml->version;')"
+          if [ -z "$version" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
           fi
 
           if [ -z "$version" ]; then

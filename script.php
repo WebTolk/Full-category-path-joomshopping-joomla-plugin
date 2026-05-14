@@ -6,10 +6,10 @@
  * @subpackage    plg_jshoppingrouter_full_category_path
  * @author        Sergey Tolkachyov
  * @copyright     Copyright (c) 2022 - 2026 Sergey Tolkachyov. All rights reserved.
- * @version       5.0.0
+ * @version       __DEPLOY_VERSION__
  * @license       GNU General Public License version 3 or later.
  * @link          https://web-tolk.ru
- * @since         5.0.0
+ * @since         __DEPLOY_VERSION__
  */
 
 declare(strict_types=1);

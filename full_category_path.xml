@@ -2,12 +2,12 @@
 <extension type="plugin" version="5.0" method="upgrade" group="jshoppingrouter">
 	<name>PLG_FULL_CATEGORY_PATH</name>
 	<author>Sergey Tolkachyov</author>
-	<creationDate>14.05.2026</creationDate>
+	<creationDate>__DEPLOY_DATE__</creationDate>
 	<copyright>Copyright (c) 2022 - 2026 Sergey Tolkachyov. All rights reserved.</copyright>
 	<license>http://www.gnu.org/licenses/gpl-2.0.html GNU/GPL</license>
 	<authorEmail>info@web-tolk.ru</authorEmail>
 	<authorUrl>https://web-tolk.ru</authorUrl>
-	<version>5.0.0</version>
+	<version>__DEPLOY_VERSION__</version>
 	<description>PLG_FULL_CATEGORY_PATH_DESC</description>
 	<namespace path="src">Joomla\Plugin\Jshoppingrouter\FullCategoryPath</namespace>
 	<scriptfile>script.php</scriptfile>
