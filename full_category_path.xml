@@ -1,19 +1,36 @@
 <?xml version="1.0"?>
-<extension type="plugin" version="4.0" method="upgrade" group="jshoppingrouter">
-	<name>Jshoppingrouter - Full Category Path</name>
-	<author>Nevigen.com, Sergey Tolkachyov</author>
-	<creationDate>May, 2022</creationDate>
-	<copyright>Copyright © Nevigen.com, Sergey Tolkachyov. All rights reserved</copyright>
+<extension type="plugin" version="5.0" method="upgrade" group="jshoppingrouter">
+	<name>PLG_FULL_CATEGORY_PATH</name>
+	<author>Sergey Tolkachyov</author>
+	<creationDate>14.05.2026</creationDate>
+	<copyright>Copyright (c) 2022 - 2026 Sergey Tolkachyov. All rights reserved.</copyright>
 	<license>http://www.gnu.org/licenses/gpl-2.0.html GNU/GPL</license>
-	<authorEmail>support@nevigen.com, info@web-tolk.ru</authorEmail>
-	<authorUrl>https://nevigen.com/, https://web-tolk.ru</authorUrl>
-	<version>4.1.0</version>
-	<description><![CDATA[</![CDATA[<p>Developed & Powered by <a href="https://nevigen.com/" target="_blank">Nevigen.com</a>, updated for Joomla 4 by <a href="https://web-tolk.ru/" target="_blank">web-tolk.ru</a></p><p>If you have several entry points to the component (several JoomShopping menu items), there may be problems with building the correct path and errors Too many redirects. We recommend using only one entry point to the component.</p>]]></description>
+	<authorEmail>info@web-tolk.ru</authorEmail>
+	<authorUrl>https://web-tolk.ru</authorUrl>
+	<version>5.0.0</version>
+	<description>PLG_FULL_CATEGORY_PATH_DESC</description>
+	<namespace path="src">Joomla\Plugin\Jshoppingrouter\FullCategoryPath</namespace>
+	<scriptfile>script.php</scriptfile>
 	<files>
-		<filename plugin="full_category_path">full_category_path.php</filename>
+		<folder plugin="full_category_path">src</folder>
+		<folder>services</folder>
+		<folder>language</folder>
+		<filename>script.php</filename>
 		<filename>full_category_path.xml</filename>
 	</files>
+	<config>
+		<fields name="params">
+			<fieldset name="basic">
+				<field
+					name="plugin_info"
+					type="plugininfo"
+					label="PLG_FULL_CATEGORY_PATH"
+					addfieldprefix="Joomla\Plugin\Jshoppingrouter\FullCategoryPath\Fields"
+				/>
+			</fieldset>
+		</fields>
+	</config>
 	<updateservers>
-        <server type="extension" name="WebTolk - Full Category Path for JoomShopping">https://web-tolk.ru/component/swjprojects/jupdate.html?element=plg_full_joomshopping_category_path</server>
-    </updateservers>
+		<server type="extension" name="WebTolk - Full Category Path for JoomShopping">https://web-tolk.ru/component/swjprojects/jupdate?element=plg_full_joomshopping_category_path</server>
+	</updateservers>
 </extension>
