@@ -1,0 +1,77 @@
+name: Build Joomla Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_version:
+        description: 'Optional package version. If empty, tag version or manifest version is used.'
+        required: false
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+
+      - name: Resolve package version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${{ github.event.inputs.package_version || '' }}"
+
+          if [ -z "$version" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [ -z "$version" ]; then
+            version="$(php -r '$xml = simplexml_load_file("full_category_path.xml"); if (!$xml) { exit(1); } echo (string) $xml->version;')"
+          fi
+
+          if [ -z "$version" ]; then
+            echo "Package version is empty." >&2
+            exit 1
+          fi
+
+          echo "PACKAGE_BUILD_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Replace placeholders
+        shell: bash
+        run: |
+          set -euo pipefail
+          php build/replace-placeholders.php --version="$PACKAGE_BUILD_VERSION"
+
+      - name: Build ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .packages
+          package_file=".packages/plg_jshoppingrouter_full_category_path_${PACKAGE_BUILD_VERSION}.zip"
+          zip -r "$package_file" full_category_path.xml language script.php services src
+          echo "PACKAGE_FILE=$package_file" >> "$GITHUB_ENV"
+          echo "PACKAGE_RELEASE_TAG=v${PACKAGE_BUILD_VERSION#v}" >> "$GITHUB_ENV"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: Jshoppingrouter - Full Category Path ${{ env.PACKAGE_BUILD_VERSION }}
+          tag_name: ${{ env.PACKAGE_RELEASE_TAG }}
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          files: ${{ env.PACKAGE_FILE }}
