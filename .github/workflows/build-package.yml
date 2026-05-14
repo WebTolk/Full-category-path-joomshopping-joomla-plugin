@@ -34,7 +34,378 @@ jobs:
         run: |
           set -euo pipefail
 
-          command=(php build/package-github.php --config=.agents/build/package.config.json --output-dir=dist --stage-dir=.packages/.stage/github --github-env="${GITHUB_ENV}")
+          cat > "${RUNNER_TEMP}/package-github.php" <<'PHP'
+          <?php
+
+          declare(strict_types=1);
+
+          function read_json(string $path): array
+          {
+              $contents = file_get_contents($path);
+              if ($contents === false) {
+                  throw new RuntimeException('Failed to read JSON file: ' . $path);
+              }
+
+              if (strncmp($contents, "\xEF\xBB\xBF", 3) === 0) {
+                  $contents = substr($contents, 3);
+              }
+
+              $decoded = json_decode($contents, true);
+              if (!is_array($decoded)) {
+                  throw new RuntimeException('Invalid JSON file: ' . $path);
+              }
+
+              return $decoded;
+          }
+
+          function is_assoc(array $array): bool
+          {
+              return array_keys($array) !== range(0, count($array) - 1);
+          }
+
+          function merge_config(array $defaults, array $project): array
+          {
+              foreach ($project as $key => $value) {
+                  if (is_array($value) && isset($defaults[$key]) && is_array($defaults[$key])) {
+                      $defaults[$key] = is_assoc($value) || is_assoc($defaults[$key])
+                          ? merge_config($defaults[$key], $value)
+                          : array_values(array_unique(array_merge($defaults[$key], $value)));
+                      continue;
+                  }
+
+                  $defaults[$key] = $value;
+              }
+
+              return $defaults;
+          }
+
+          function normalize_path(string $path): string
+          {
+              return str_replace(['/', '\\'], DIRECTORY_SEPARATOR, trim($path, " \t\n\r\0\x0B\"'"));
+          }
+
+          function resolve_path(string $path, string $baseDir): string
+          {
+              $path = normalize_path($path);
+              if (str_starts_with($path, '/') || preg_match('~^[A-Za-z]:(?:[\\\\/]|$)~', $path) === 1) {
+                  $resolved = realpath($path);
+                  return rtrim(normalize_path($resolved !== false ? $resolved : $path), DIRECTORY_SEPARATOR);
+              }
+
+              $combined = rtrim($baseDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . ltrim($path, DIRECTORY_SEPARATOR);
+              $resolved = realpath($combined);
+
+              return rtrim(normalize_path($resolved !== false ? $resolved : $combined), DIRECTORY_SEPARATOR);
+          }
+
+          function relative_path(string $root, string $path): string
+          {
+              $root = rtrim(str_replace('\\', '/', $root), '/') . '/';
+              $path = str_replace('\\', '/', $path);
+
+              return str_starts_with($path, $root) ? substr($path, strlen($root)) : $path;
+          }
+
+          function normalize_exclude_patterns(array $exclude): array
+          {
+              $patterns = [];
+              foreach ($exclude as $pattern) {
+                  if (!is_string($pattern) || trim($pattern) === '') {
+                      continue;
+                  }
+
+                  $normalized = str_replace('\\', '/', trim($pattern));
+                  if (str_ends_with($normalized, '/')) {
+                      $patterns[] = rtrim($normalized, '/');
+                      $normalized .= '**';
+                  }
+
+                  $patterns[] = $normalized;
+                  if (strpbrk($normalized, '/') === false) {
+                      $patterns[] = '**/' . $normalized;
+                  }
+              }
+
+              return array_values(array_unique($patterns));
+          }
+
+          function is_excluded(string $path, array $patterns): bool
+          {
+              $path = str_replace('\\', '/', $path);
+              foreach ($patterns as $pattern) {
+                  $regex = str_replace(['\\*\\*', '\\*', '\\?'], ['.*', '[^/]*', '[^/]'], preg_quote($pattern, '~'));
+                  if (preg_match('~^' . $regex . '$~i', $path) === 1) {
+                      return true;
+                  }
+              }
+
+              return false;
+          }
+
+          function get_files(string $root, array $exclude): array
+          {
+              $patterns = normalize_exclude_patterns($exclude);
+              $root = rtrim(normalize_path($root), DIRECTORY_SEPARATOR);
+              $rootLength = strlen($root) + 1;
+              $files = [];
+
+              if (!is_dir($root)) {
+                  return [];
+              }
+
+              $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
+              foreach ($iterator as $item) {
+                  if (!$item->isFile()) {
+                      continue;
+                  }
+
+                  $relative = str_replace('\\', '/', substr($item->getPathname(), $rootLength));
+                  if (!is_excluded($relative, $patterns)) {
+                      $files[] = $relative;
+                  }
+              }
+
+              sort($files, SORT_STRING);
+
+              return $files;
+          }
+
+          function copy_files(string $sourceRoot, string $targetRoot, array $files): void
+          {
+              foreach ($files as $path) {
+                  $source = $sourceRoot . DIRECTORY_SEPARATOR . normalize_path($path);
+                  $target = $targetRoot . DIRECTORY_SEPARATOR . normalize_path($path);
+                  $directory = dirname($target);
+
+                  if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
+                      throw new RuntimeException('Failed to create staged directory: ' . $directory);
+                  }
+
+                  if (!copy($source, $target)) {
+                      throw new RuntimeException('Failed to copy staged file: ' . $path);
+                  }
+              }
+          }
+
+          function remove_directory(string $directory): void
+          {
+              if (!is_dir($directory)) {
+                  return;
+              }
+
+              $iterator = new RecursiveIteratorIterator(
+                  new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS),
+                  RecursiveIteratorIterator::CHILD_FIRST
+              );
+
+              foreach ($iterator as $item) {
+                  $item->isDir() ? @rmdir($item->getPathname()) : @unlink($item->getPathname());
+              }
+
+              @rmdir($directory);
+          }
+
+          function replace_enabled(array $config, string $name): bool
+          {
+              return !empty($config['replace'][$name]);
+          }
+
+          function copyright_text(array $config): string
+          {
+              $year = date('Y');
+              $date = !empty($config['projectDateStart']) && $config['projectDateStart'] !== $year
+                  ? (string) $config['projectDateStart'] . ' - ' . $year
+                  : $year;
+
+              return sprintf((string) $config['copyright'], $date);
+          }
+
+          function apply_metadata(string $root, array $files, array $config, string $version, string $date): void
+          {
+              foreach ($files as $path) {
+                  $extension = strtolower((string) pathinfo($path, PATHINFO_EXTENSION));
+                  if (!in_array($extension, (array) $config['textExtensions'], true)) {
+                      continue;
+                  }
+
+                  $file = $root . DIRECTORY_SEPARATOR . normalize_path($path);
+                  $original = (string) file_get_contents($file);
+                  $updated = $original;
+
+                  if (replace_enabled($config, 'versionDocblock')) {
+                      $updated = preg_replace('/@version(\s*)(.?)*/', '@version${1}' . $version, $updated) ?? $updated;
+                      $updated = preg_replace('/\* Version:(\s*)(.?)*/', '* Version:${1}' . $version, $updated) ?? $updated;
+                  }
+
+                  if (replace_enabled($config, 'versionXml')) {
+                      $updated = preg_replace('/<version>(.?)*<\/version>/', '<version>' . $version . '</version>', $updated) ?? $updated;
+                  }
+
+                  if (replace_enabled($config, 'dateDocblock')) {
+                      $updated = preg_replace('/@date(\s*)(.?)*/', '@date${1}' . $date, $updated) ?? $updated;
+                  }
+
+                  if (replace_enabled($config, 'dateXml')) {
+                      $updated = preg_replace('/<date>(.?)*<\/date>/', '<date>' . $date . '</date>', $updated) ?? $updated;
+                  }
+
+                  if (replace_enabled($config, 'creationDateXml')) {
+                      $updated = preg_replace('/<creationDate>(.?)*<\/creationDate>/', '<creationDate>' . $date . '</creationDate>', $updated) ?? $updated;
+                  }
+
+                  if (replace_enabled($config, 'package') && !empty($config['name'])) {
+                      $updated = preg_replace('/@package(\s*)(.?)*/', '@package       ' . (string) $config['name'], $updated) ?? $updated;
+                  }
+
+                  if (replace_enabled($config, 'author') && !empty($config['author'])) {
+                      $updated = preg_replace('/@author(\s*)(.?)*/', '@author     ' . (string) $config['author'], $updated) ?? $updated;
+                      $updated = preg_replace('/<author>(.?)*<\/author>/', '<author>' . (string) $config['author'] . '</author>', $updated) ?? $updated;
+                  }
+
+                  if (replace_enabled($config, 'authorEmail') && !empty($config['authorEmail'])) {
+                      $updated = preg_replace('/@authorEmail(\s*)(.?)*/', '@authorEmail       ' . (string) $config['authorEmail'], $updated) ?? $updated;
+                      $updated = preg_replace('/@email(\s*)(.?)*/', '@email       ' . (string) $config['authorEmail'], $updated) ?? $updated;
+                      $updated = preg_replace('/<authorEmail>(.?)*<\/authorEmail>/', '<authorEmail>' . (string) $config['authorEmail'] . '</authorEmail>', $updated) ?? $updated;
+                  }
+
+                  if (replace_enabled($config, 'link') && !empty($config['link'])) {
+                      $updated = preg_replace('/@link(\s*)(.?)*/', '@link          ' . (string) $config['link'], $updated) ?? $updated;
+                      $updated = preg_replace('/<authorUrl>(.?)*<\/authorUrl>/', '<authorUrl>' . (string) $config['link'] . '</authorUrl>', $updated) ?? $updated;
+                  }
+
+                  if (replace_enabled($config, 'copyright') && !empty($config['copyright'])) {
+                      $copyright = copyright_text($config);
+                      $updated = preg_replace('/@copyright(\s*)(.?)*/u', '@copyright  ' . $copyright, $updated) ?? $updated;
+                      $updated = preg_replace('/<copyright>(.?)*<\/copyright>/', '<copyright>' . $copyright . '</copyright>', $updated) ?? $updated;
+                  }
+
+                  $updated = str_replace(
+                      [(string) $config['replace']['deployVersionToken'], (string) $config['replace']['deployDateToken']],
+                      [$version, $date],
+                      $updated
+                  );
+
+                  if ($updated !== $original && file_put_contents($file, $updated) === false) {
+                      throw new RuntimeException('Failed to write staged file: ' . $file);
+                  }
+              }
+          }
+
+          function create_zip(string $root, string $packagePath, array $files): void
+          {
+              if (!is_dir(dirname($packagePath)) && !mkdir(dirname($packagePath), 0777, true) && !is_dir(dirname($packagePath))) {
+                  throw new RuntimeException('Failed to create output directory: ' . dirname($packagePath));
+              }
+
+              $zip = new ZipArchive();
+              if ($zip->open($packagePath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+                  throw new RuntimeException('Failed to create archive: ' . $packagePath);
+              }
+
+              sort($files, SORT_STRING);
+              foreach ($files as $path) {
+                  $absolute = $root . DIRECTORY_SEPARATOR . normalize_path($path);
+                  if (is_file($absolute)) {
+                      $zip->addFile($absolute, str_replace('\\', '/', $path));
+                  }
+              }
+
+              if (!@$zip->close()) {
+                  $temporaryArchive = null;
+                  foreach (glob($packagePath . '.*') ?: [] as $candidate) {
+                      $probe = new ZipArchive();
+                      $result = $probe->open($candidate);
+                      if ($result === true) {
+                          $probe->close();
+                          $temporaryArchive = $candidate;
+                          break;
+                      }
+                  }
+
+                  unset($zip);
+                  if ($temporaryArchive === null || !copy($temporaryArchive, $packagePath)) {
+                      throw new RuntimeException('Failed to finalize archive: ' . $packagePath);
+                  }
+
+                  @unlink($temporaryArchive);
+              }
+          }
+
+          $defaults = [
+              'packageDir' => '.packages',
+              'stageDir' => '.packages/.stage',
+              'packageNamePattern' => '{name}_{version}.zip',
+              'dateFormat' => 'd.m.Y',
+              'textExtensions' => ['php', 'xml', 'ini', 'json', 'md', 'txt', 'yml', 'yaml'],
+              'exclude' => ['.agents/', '.git/', '.github/', '.idea/', '.packages/', '.phing/', '.serena/', 'build/', 'dist/', '.gitignore', 'phing.xml', 'LICENSE', '*.md'],
+              'replace' => [
+                  'versionDocblock' => true,
+                  'versionXml' => true,
+                  'dateDocblock' => true,
+                  'dateXml' => true,
+                  'creationDateXml' => true,
+                  'author' => true,
+                  'authorEmail' => true,
+                  'link' => true,
+                  'package' => true,
+                  'copyright' => true,
+                  'deployDateToken' => '__DEPLOY_DATE__',
+                  'deployVersionToken' => '__DEPLOY_VERSION__',
+              ],
+          ];
+
+          $options = [];
+          foreach (array_slice($argv, 1) as $argument) {
+              if (str_starts_with($argument, '--')) {
+                  [$name, $value] = array_pad(explode('=', substr($argument, 2), 2), 2, '1');
+                  $options[$name] = trim($value, " \t\n\r\0\x0B\"'");
+              }
+          }
+
+          $configPath = resolve_path((string) ($options['config'] ?? '.agents/build/package.config.json'), getcwd());
+          $config = merge_config($defaults, read_json($configPath));
+          $version = (string) ($options['version'] ?? $config['version']);
+          $date = date((string) $config['dateFormat']);
+          $root = resolve_path((string) $config['root'], dirname($configPath));
+          $outputDir = resolve_path((string) ($options['output-dir'] ?? $config['packageDir']), $root);
+          $stageBase = resolve_path((string) ($options['stage-dir'] ?? $config['stageDir']), $root);
+          $packageName = str_replace(['{name}', '{version}'], [(string) $config['name'], $version], (string) $config['packageNamePattern']);
+          $stageRoot = rtrim($stageBase, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . preg_replace('/[^A-Za-z0-9_.-]+/', '-', (string) $config['name']) . '-' . $version . '-' . getmypid();
+
+          remove_directory($stageRoot);
+          if (!mkdir($stageRoot, 0777, true) && !is_dir($stageRoot)) {
+              throw new RuntimeException('Failed to create stage directory: ' . $stageRoot);
+          }
+
+          try {
+              $files = get_files($root, array_merge((array) $config['exclude'], [
+                  relative_path($root, $stageRoot) . '/',
+                  relative_path($root, $outputDir) . '/',
+                  (string) $config['packageDir'] . '/',
+              ]));
+              copy_files($root, $stageRoot, $files);
+              $stageFiles = get_files($stageRoot, []);
+              apply_metadata($stageRoot, $stageFiles, $config, $version, $date);
+              $packagePath = $outputDir . DIRECTORY_SEPARATOR . $packageName;
+              create_zip($stageRoot, $packagePath, get_files($stageRoot, []));
+          } finally {
+              remove_directory($stageRoot);
+          }
+
+          $envFile = (string) ($options['github-env'] ?? '');
+          if ($envFile !== '') {
+              file_put_contents($envFile, implode(PHP_EOL, [
+                  'PACKAGE_DISPLAY_NAME=' . (string) $config['name'],
+                  'PACKAGE_BUILD_VERSION=' . $version,
+                  'PACKAGE_RELEASE_TAG=v' . ltrim($version, 'v'),
+                  'PACKAGE_FILE=' . str_replace('\\', '/', relative_path($root, $packagePath)),
+              ]) . PHP_EOL, FILE_APPEND | LOCK_EX);
+          }
+
+          fwrite(STDOUT, 'Package created: ' . relative_path($root, $packagePath) . PHP_EOL);
+          PHP
+
+          command=(php "${RUNNER_TEMP}/package-github.php" --config=.agents/build/package.config.json --output-dir=dist --stage-dir=.packages/.stage/github --github-env="${GITHUB_ENV}")
 
           if [ -n "${{ inputs.package_version }}" ]; then
             command+=(--version="${{ inputs.package_version }}")

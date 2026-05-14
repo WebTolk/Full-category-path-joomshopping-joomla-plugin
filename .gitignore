@@ -9,3 +9,4 @@
 .serena
 phing.xml
 dist/
+dist-inline/
