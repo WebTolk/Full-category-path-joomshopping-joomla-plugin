@@ -11,10 +11,6 @@ on:
     tags:
       - 'v*'
 
-env:
-  PACKAGER_REPOSITORY: web-tolk/phing-packager
-  PACKAGER_REF: main
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,13 +21,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Checkout shared packager
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.PACKAGER_REPOSITORY }}
-          ref: ${{ env.PACKAGER_REF }}
-          path: .packager
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -45,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          command=(php .packager/bin/packager.php package --config=.agents/build/package.config.json --output-dir=dist --stage-dir=.packages/.stage/github --github-env="${GITHUB_ENV}")
+          command=(php build/package-github.php --config=.agents/build/package.config.json --output-dir=dist --stage-dir=.packages/.stage/github --github-env="${GITHUB_ENV}")
 
           if [ -n "${{ inputs.package_version }}" ]; then
             command+=(--version="${{ inputs.package_version }}")
